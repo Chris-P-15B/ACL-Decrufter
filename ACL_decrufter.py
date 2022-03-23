@@ -17,7 +17,7 @@ Caveats:
 1) IPv4 only & understands only a subset of ACL syntax, ignores remarks.
 2) Attempts to minimise the number of ACEs, which may break the logic for chains of deny & permit statements. Test your results!
 
-v0.1 - Initial release.
+v0.1 - Initial development release.
 """
 
 # Subnet / wildcard mask to CIDR prefix length lookup table
@@ -653,6 +653,7 @@ def check_adjacent_networks(acl_list):
     acl_list2 (list of dict) - remediated list of ACE dictionaries
     """
     acl_list2 = acl_list.copy()
+    # Check source networks
     for count, ace1 in enumerate(acl_list):
         try:
             for ace2 in acl_list[count + 1 :]:
@@ -722,6 +723,95 @@ def check_adjacent_networks(acl_list):
                                             0
                                         ].with_prefixlen
                                         ace1["source_network_obj"] = merged_network[0]
+                                        break
+                                for ace3 in acl_list2:
+                                    if ace3["line_num"] == ace2["line_num"]:
+                                        acl_list2.remove(ace3)
+                                        break
+        except IndexError:
+            pass
+
+    acl_list = acl_list2.copy()
+    # Check destination networks
+    for count, ace1 in enumerate(acl_list):
+        try:
+            for ace2 in acl_list[count + 1 :]:
+                if (ace1["action"] == ace2["action"]) and (
+                    ace1["protocol"] == ace2["protocol"]
+                    or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
+                ):
+                    if (ace1["source_network"] == ace2["source_network"]) or (
+                        ace1["source_network"] == "any"
+                    ):
+                        merged_network = list(
+                            ipaddress.collapse_addresses(
+                                [
+                                    ace1["destination_network_obj"],
+                                    ace2["destination_network_obj"],
+                                ]
+                            )
+                        )
+                        # ipaddress.collapse_addresses will return a single IPv4Network if passed adjacent networks
+                        if len(merged_network) == 1:
+                            (
+                                src_port_match,
+                                dst_port_match,
+                            ) = check_source_destination_ports_match(ace1, ace2)
+
+                            if src_port_match and dst_port_match:
+                                # Replace with merged network
+                                for ace3 in acl_list2:
+                                    if ace3["line_num"] == ace1["line_num"]:
+                                        ace1["destination_network"] = merged_network[
+                                            0
+                                        ].with_prefixlen
+                                        ace1[
+                                            "destination_network_obj"
+                                        ] = merged_network[0]
+                                        break
+                                for ace3 in acl_list2:
+                                    if ace3["line_num"] == ace2["line_num"]:
+                                        acl_list2.remove(ace3)
+                                        break
+        except IndexError:
+            pass
+
+    acl_list = acl_list2.copy()
+    for count, ace1 in enumerate(reversed(acl_list)):
+        try:
+            for ace2 in list(reversed(acl_list))[count + 1 :]:
+                if (ace1["action"] == ace2["action"]) and (
+                    ace1["protocol"] == ace2["protocol"]
+                    or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
+                ):
+                    if (ace1["source_network"] == ace2["source_network"]) or (
+                        ace1["source_network"] == "any"
+                    ):
+                        merged_network = list(
+                            ipaddress.collapse_addresses(
+                                [
+                                    ace1["destination_network_obj"],
+                                    ace2["destination_network_obj"],
+                                ]
+                            )
+                        )
+                        # ipaddress.collapse_addresses will return a single IPv4Network if passed adjacent networks
+                        if len(merged_network) == 1:
+                            (
+                                src_port_match,
+                                dst_port_match,
+                            ) = check_source_destination_ports_match(ace1, ace2)
+
+                            if src_port_match and dst_port_match:
+                                # Replace with merged network
+                                for ace3 in acl_list2:
+                                    if ace3["line_num"] == ace1["line_num"]:
+                                        ace1["destination_network"] = merged_network[
+                                            0
+                                        ].with_prefixlen
+                                        ace1[
+                                            "destination_network_obj"
+                                        ] = merged_network[0]
                                         break
                                 for ace3 in acl_list2:
                                     if ace3["line_num"] == ace2["line_num"]:
