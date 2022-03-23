@@ -9,4 +9,5 @@ Caveats:
 2) Attempts to minimise the number of ACEs, which may break the logic for chains of deny & permit statements. Test your results!
 
 
+Version History:
 * v0.1 - Initial development release.
