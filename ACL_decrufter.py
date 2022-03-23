@@ -14,7 +14,7 @@ Access Control Entries (ACE) covered by an earlier deny, permit/deny with overla
 permit/deny for adjacent networks.
 
 Caveats:
-1) IPv4 only & understands only a subset of ACL syntax, ignores remarks.
+1) IPv4 only & understands only a subset of ACL syntax (e.g. no object-groups), ignores remarks.
 2) Attempts to minimise the number of ACEs, which may break the logic for chains of deny & permit statements. Test your results!
 
 v0.1 - Initial development release.
@@ -214,7 +214,7 @@ def parse_acl(acl_string):
             r"\s*(eq|neq|lt|gt|range)?\s*([\w\-]+|[\w\-]+\s[\w\-]+)?\s*(established|echo|echo\-reply)?\s(\d+\.\d+\.\d+\.\d+|any|host|\d+\.\d+\.\d+\.\d+\/\d+)"
             r"\s*(\d+\.\d+\.\d+\.\d+)?\s*(eq|neq|lt|gt|range)?\s*([\w\-]+|[\w\-]+\s[\w\-]+)?\s*(established|echo|echo\-reply)?"
             r"\s*(log\-input|log)?\s*([\(\[][\w,=:\s]+[\)\]])?$",
-            line.lower(),
+            line.lower().rstrip(),
         )
         ace_dict = {
             "line_num": "",
@@ -825,10 +825,18 @@ def check_adjacent_networks(acl_list):
 
 def main():
     """Ties the whole process together."""
-    verbose_mode = True
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} [filename]")
+        print(f"Usage: {sys.argv[0]} [filename] [verbose]")
+        print(
+            "\nVerbose keyword enables optional output of the intermediate ACL de-crufting stages."
+        )
         sys.exit(1)
+
+    if len(sys.argv) == 3:
+        if sys.argv[2].lower() == "verbose":
+            verbose_mode = True
+    else:
+        verbose_mode = False
 
     try:
         filepath = Path(sys.argv[1])
@@ -841,7 +849,7 @@ def main():
     acl_list = parse_acl(acl_string)
 
     if verbose_mode:
-        print("Original ACL:")
+        print("\nOriginal ACL:")
     for ace in acl_list:
         # Sanity checks
         assert ace["action"] in ("permit", "deny")
