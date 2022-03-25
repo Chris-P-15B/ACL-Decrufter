@@ -17,6 +17,7 @@ Caveats:
 1) IPv4 only & understands only a subset of ACL syntax (e.g. no object-groups), ignores remarks.
 2) Attempts to minimise the number of ACEs, which may break the logic for chains of deny & permit statements. Test your results!
 
+v0.2 - Minor fixes.
 v0.1 - Initial development release.
 """
 
@@ -205,7 +206,7 @@ def parse_acl(acl_string):
     acl_string (str) - ACL text to parse
 
     Returns:
-    acl_list (list of dict) - list of ACE dictionaries
+    acl_list (list of dict) - list of ACE dicts
     """
     acl_list = []
     for line in acl_string.splitlines():
@@ -529,10 +530,10 @@ def check_source_destination_ports_match(ace1, ace2):
 def check_overlapping_deny(acl_list):
     """Iterate through acl_list top down, to remove permit ACEs with an overlapping deny statement earlier in the ACL.
     Parameters:
-    acl_list (list of dict) - list of ACE dictionaries
+    acl_list (list of dict) - list of ACE dicts
 
     Returns:
-    acl_list2 (list of dict) - remediated list of ACE dictionaries
+    acl_list2 (list of dict) - remediated list of ACE dicts
     """
     acl_list2 = acl_list.copy()
     for count, ace1 in enumerate(acl_list):
@@ -574,10 +575,10 @@ def check_overlapping_deny(acl_list):
 def check_overlapping_networks(acl_list):
     """Iterate through acl_list top down & bottom up, to remove ACEs with networks that are subnets of other entries.
     Parameters:
-    acl_list (list of dict) - list of ACE dictionaries
+    acl_list (list of dict) - list of ACE dicts
 
     Returns:
-    acl_list2 (list of dict) - remediated list of ACE dictionaries
+    acl_list2 (list of dict) - remediated list of ACE dicts
     """
     acl_list2 = acl_list.copy()
     for count, ace1 in enumerate(acl_list):
@@ -647,10 +648,10 @@ def check_overlapping_networks(acl_list):
 def check_adjacent_networks(acl_list):
     """Iterate through acl_list top down & bottom up to merge adjacent source networks.
     Parameters:
-    acl_list (list of dict) - list of ACE dictionaries
+    acl_list (list of dict) - list of ACE dicts
 
     Returns:
-    acl_list2 (list of dict) - remediated list of ACE dictionaries
+    acl_list2 (list of dict) - remediated list of ACE dicts
     """
     acl_list2 = acl_list.copy()
     # Check source networks
@@ -823,6 +824,30 @@ def check_adjacent_networks(acl_list):
     return acl_list2
 
 
+def display_ACL(acl_list):
+    """
+    Print readable form of list of ACE dictionaries.
+
+    Parameters:
+    acl_list (list of dict) - list of ACE dicts
+    """
+    for ace in acl_list:
+        parsed_ace = (
+            f"{ace['action']} "
+            f"{ace['protocol']} "
+            f"{ace['source_network']} "
+            f"{ace['source_operator']} "
+            f"{' '.join(str(x) for x in ace['source_ports']) if ace['source_ports'] else ''} "
+            f"{ace['source_modifier']} "
+            f"{ace['destination_network']} "
+            f"{ace['destination_operator']} "
+            f"{' '.join(str(x) for x in ace['destination_ports']) if ace['destination_ports'] else ''} "
+            f"{ace['destination_modifier']} "
+            f"{ace['optional_action']} "
+        )
+        print(re.sub(r" +", " ", parsed_ace))
+
+
 def main():
     """Ties the whole process together."""
     if len(sys.argv) < 2:
@@ -848,10 +873,8 @@ def main():
 
     acl_list = parse_acl(acl_string)
 
-    if verbose_mode:
-        print("\nOriginal ACL:")
+    # Sanity checks
     for ace in acl_list:
-        # Sanity checks
         assert ace["action"] in ("permit", "deny")
         assert ace["protocol"] in PROTOCOL_NAMES
         assert re.search("\d+\.\d+\.\d+\.\d+\/\d+|any", ace["source_network"])
@@ -888,102 +911,34 @@ def main():
         assert isinstance(ace["destination_modifier"], str)
         assert isinstance(ace["optional_action"], str)
 
-        parsed_ace = (
-            f"{ace['action']} "
-            f"{ace['protocol']} "
-            f"{ace['source_network']} "
-            f"{ace['source_operator']} "
-            f"{ace['source_ports'] if ace['source_ports'] else ''} "
-            f"{ace['source_modifier']} "
-            f"{ace['destination_network']} "
-            f"{ace['destination_operator']} "
-            f"{ace['destination_ports'] if ace['destination_ports'] else ''} "
-            f"{ace['destination_modifier']} "
-            f"{ace['optional_action']} "
-        )
-        if verbose_mode:
-            print(re.sub(r" +", " ", parsed_ace))
+    if verbose_mode:
+        print("\nOriginal ACL:")
+        display_ACL(acl_list)
 
     # Note that IPv4Network.subnet_of() considers identical networks as a subnet, so need to skip comparing to self
     acl_list2 = check_overlapping_deny(acl_list)
     if verbose_mode:
         # Display ACL with denied ACEs removed
         print("\nNon-Overlapping Deny ACL:")
-        for ace in acl_list2:
-            parsed_ace = (
-                f"{ace['action']} "
-                f"{ace['protocol']} "
-                f"{ace['source_network']} "
-                f"{ace['source_operator']} "
-                f"{ace['source_ports'] if ace['source_ports'] else ''} "
-                f"{ace['source_modifier']} "
-                f"{ace['destination_network']} "
-                f"{ace['destination_operator']} "
-                f"{ace['destination_ports'] if ace['destination_ports'] else ''} "
-                f"{ace['destination_modifier']} "
-                f"{ace['optional_action']} "
-            )
-            print(re.sub(r" +", " ", parsed_ace))
+        display_ACL(acl_list2)
 
     acl_list = acl_list2.copy()
     acl_list2 = check_overlapping_networks(acl_list)
     if verbose_mode:
         # Display ACL with overlapping ACEs removed
         print("\nNon-Overlapping Networks ACL:")
-        for ace in acl_list2:
-            parsed_ace = (
-                f"{ace['action']} "
-                f"{ace['protocol']} "
-                f"{ace['source_network']} "
-                f"{ace['source_operator']} "
-                f"{ace['source_ports'] if ace['source_ports'] else ''} "
-                f"{ace['source_modifier']} "
-                f"{ace['destination_network']} "
-                f"{ace['destination_operator']} "
-                f"{ace['destination_ports'] if ace['destination_ports'] else ''} "
-                f"{ace['destination_modifier']} "
-                f"{ace['optional_action']} "
-            )
-            print(re.sub(r" +", " ", parsed_ace))
+        display_ACL(acl_list2)
 
     acl_list = acl_list2.copy()
     acl_list2 = check_adjacent_networks(acl_list)
     if verbose_mode:
         # Display ACL with adjacent networks merged
         print("\nMerged Adjacent Networks ACL:")
-        for ace in acl_list2:
-            parsed_ace = (
-                f"{ace['action']} "
-                f"{ace['protocol']} "
-                f"{ace['source_network']} "
-                f"{ace['source_operator']} "
-                f"{ace['source_ports'] if ace['source_ports'] else ''} "
-                f"{ace['source_modifier']} "
-                f"{ace['destination_network']} "
-                f"{ace['destination_operator']} "
-                f"{ace['destination_ports'] if ace['destination_ports'] else ''} "
-                f"{ace['destination_modifier']} "
-                f"{ace['optional_action']} "
-            )
-            print(re.sub(r" +", " ", parsed_ace))
+        display_ACL(acl_list2)
 
     # Display decrufted ACL
     print("\nDecrufted ACL:")
-    for ace in acl_list2:
-        parsed_ace = (
-            f"{ace['action']} "
-            f"{ace['protocol']} "
-            f"{ace['source_network']} "
-            f"{ace['source_operator']} "
-            f"{ace['source_ports'] if ace['source_ports'] else ''} "
-            f"{ace['source_modifier']} "
-            f"{ace['destination_network']} "
-            f"{ace['destination_operator']} "
-            f"{ace['destination_ports'] if ace['destination_ports'] else ''} "
-            f"{ace['destination_modifier']} "
-            f"{ace['optional_action']} "
-        )
-        print(re.sub(r" +", " ", parsed_ace))
+    display_ACL(acl_list2)
 
 
 if __name__ == "__main__":

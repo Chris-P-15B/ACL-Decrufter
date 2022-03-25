@@ -10,6 +10,7 @@ Caveats:
 
 
 Version History:
+* v0.2 - Minor fixes.
 * v0.1 - Initial development release.
 
 # Usage
