@@ -17,6 +17,7 @@ Caveats:
 1) IPv4 only & understands only a subset of ACL syntax (e.g. no object-groups), ignores remarks.
 2) Attempts to minimise the number of ACEs, which may break the logic for chains of deny & permit statements. Test your results!
 
+v0.3 - Added outputing to subnet mask & wildcard mask notations.
 v0.2 - Minor fixes.
 v0.1 - Initial development release.
 """
@@ -207,6 +208,7 @@ def parse_acl(acl_string):
 
     Returns:
     acl_list (list of dict) - list of ACE dicts
+    notation (str) - ACL uses prefix, subnet or wildcard notation
     """
     acl_list = []
     for line in acl_string.splitlines():
@@ -237,6 +239,7 @@ def parse_acl(acl_string):
         if not acl_parts:
             continue
 
+        notation = "prefix"
         # Parse the Access Control Entry items into a dictionary of ACE elements, then store in a list
         for item in acl_parts.groups():
             item = item if item is not None else ""
@@ -263,12 +266,15 @@ def parse_acl(acl_string):
                 and not ace_dict["destination_network"]
                 and item in SUBNET_MASKS
             ):
-                # Create IPv4Network object from subnet mask
+                # Create IPv4Network object from subnet or wildcard mask
                 ace_dict["source_network"] += f"/{SUBNET_MASKS[item]}"
                 ace_dict["source_network_obj"] = ipaddress.IPv4Network(
                     ace_dict["source_network"]
                 )
-
+                if item in ([x for x in list(SUBNET_MASKS)[::2]]):
+                    notation = "subnet"
+                else:
+                    notation = "wildcard"
             elif (
                 ace_dict["source_network"]
                 and ace_dict["source_network"] == "host"
@@ -317,12 +323,15 @@ def parse_acl(acl_string):
                 else:
                     ace_dict["destination_network"] = item
             elif ace_dict["destination_network"] and item in SUBNET_MASKS:
-                # Create IPv4Network object from subnet mask
+                # Create IPv4Network object from subnet or wildcard mask
                 ace_dict["destination_network"] += f"/{SUBNET_MASKS[item]}"
                 ace_dict["destination_network_obj"] = ipaddress.IPv4Network(
                     ace_dict["destination_network"]
                 )
-
+                if item in ([x for x in list(SUBNET_MASKS)[::2]]):
+                    notation = "subnet"
+                else:
+                    notation = "wildcard"
             elif (
                 ace_dict["destination_network"]
                 and ace_dict["destination_network"] == "host"
@@ -361,7 +370,7 @@ def parse_acl(acl_string):
                 ace_dict["optional_action"] = item
         acl_list.append(ace_dict)
 
-    return acl_list
+    return acl_list, notation
 
 
 def check_source_destination_ports_match(ace1, ace2):
@@ -824,22 +833,85 @@ def check_adjacent_networks(acl_list):
     return acl_list2
 
 
-def display_ACL(acl_list):
+def display_ACL(acl_list, notation):
     """
     Print readable form of list of ACE dictionaries.
 
     Parameters:
     acl_list (list of dict) - list of ACE dicts
+    notation (str) - ACL uses prefix, subnet or wildcard notation
     """
     for ace in acl_list:
+        # Generate correct output for different network notations
+        # Subnet masks are first in the lookup dictionary, so use first match
+        if notation == "subnet":
+            if ace["source_network"] == "any":
+                source_network = ace["source_network"]
+            else:
+                subnet_mask = ace["source_network"][
+                    ace["source_network"].find("/") + 1 :
+                ]
+                for key, value in SUBNET_MASKS.items():
+                    if subnet_mask == value:
+                        source_network = ace["source_network"][
+                            : ace["source_network"].find("/")
+                        ]
+                        source_network += f" {key}"
+                        break
+            if ace["destination_network"] == "any":
+                destination_network = ace["destination_network"]
+            else:
+                subnet_mask = ace["destination_network"][
+                    ace["destination_network"].find("/") + 1 :
+                ]
+                for key, value in SUBNET_MASKS.items():
+                    if subnet_mask == value:
+                        destination_network = ace["destination_network"][
+                            : ace["destination_network"].find("/")
+                        ]
+                        destination_network += f" {key}"
+                        break
+        # Wildcard masks are second in the lookup dictionary, so use last match
+        elif notation == "wildcard":
+            if ace["source_network"] == "any":
+                source_network = ace["source_network"]
+            else:
+                subnet_mask = ace["source_network"][
+                    ace["source_network"].find("/") + 1 :
+                ]
+                for key, value in SUBNET_MASKS.items():
+                    if subnet_mask == value:
+                        source_network = ace["source_network"][
+                            : ace["source_network"].find("/")
+                        ]
+                        source_network += f" {key}"
+                        continue
+            if ace["destination_network"] == "any":
+                destination_network = ace["destination_network"]
+            else:
+                subnet_mask = ace["destination_network"][
+                    ace["destination_network"].find("/") + 1 :
+                ]
+                for key, value in SUBNET_MASKS.items():
+                    if subnet_mask == value:
+                        destination_network = ace["destination_network"][
+                            : ace["destination_network"].find("/")
+                        ]
+                        destination_network += f" {key}"
+                        continue
+        # Default to prefix notation, no special handling
+        else:
+            source_network = ace["source_network"]
+            destination_network = ace["destination_network"]
+
         parsed_ace = (
             f"{ace['action']} "
             f"{ace['protocol']} "
-            f"{ace['source_network']} "
+            f"{source_network} "
             f"{ace['source_operator']} "
             f"{' '.join(str(x) for x in ace['source_ports']) if ace['source_ports'] else ''} "
             f"{ace['source_modifier']} "
-            f"{ace['destination_network']} "
+            f"{destination_network} "
             f"{ace['destination_operator']} "
             f"{' '.join(str(x) for x in ace['destination_ports']) if ace['destination_ports'] else ''} "
             f"{ace['destination_modifier']} "
@@ -871,7 +943,7 @@ def main():
         print(f"Unable to open {sys.argv[1]}")
         sys.exit(1)
 
-    acl_list = parse_acl(acl_string)
+    acl_list, notation = parse_acl(acl_string)
 
     # Sanity checks
     for ace in acl_list:
@@ -913,32 +985,32 @@ def main():
 
     if verbose_mode:
         print("\nOriginal ACL:")
-        display_ACL(acl_list)
+        display_ACL(acl_list, notation)
 
     # Note that IPv4Network.subnet_of() considers identical networks as a subnet, so need to skip comparing to self
     acl_list2 = check_overlapping_deny(acl_list)
     if verbose_mode:
         # Display ACL with denied ACEs removed
         print("\nNon-Overlapping Deny ACL:")
-        display_ACL(acl_list2)
+        display_ACL(acl_list2, notation)
 
     acl_list = acl_list2.copy()
     acl_list2 = check_overlapping_networks(acl_list)
     if verbose_mode:
         # Display ACL with overlapping ACEs removed
         print("\nNon-Overlapping Networks ACL:")
-        display_ACL(acl_list2)
+        display_ACL(acl_list2, notation)
 
     acl_list = acl_list2.copy()
     acl_list2 = check_adjacent_networks(acl_list)
     if verbose_mode:
         # Display ACL with adjacent networks merged
         print("\nMerged Adjacent Networks ACL:")
-        display_ACL(acl_list2)
+        display_ACL(acl_list2, notation)
 
     # Display decrufted ACL
     print("\nDecrufted ACL:")
-    display_ACL(acl_list2)
+    display_ACL(acl_list2, notation)
 
 
 if __name__ == "__main__":

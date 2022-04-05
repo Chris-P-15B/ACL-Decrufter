@@ -10,13 +10,17 @@ Caveats:
 
 
 Version History:
+* v0.3 - Added outputing to subnet mask & wildcard mask notations.
 * v0.2 - Minor fixes.
 * v0.1 - Initial development release.
+
+# Pre-Requisites
+* Python 3.7+
 
 # Usage
 Command line parameters, for those with spaces enclose the parameter in "":
 
-* filename - path to a text file containing the show access-list output
+* filename - path to a text file containing the show access-list output for a single ACL
 * verbose - enables optional output of the intermediate ACL de-crufting stages
 
 For example:
