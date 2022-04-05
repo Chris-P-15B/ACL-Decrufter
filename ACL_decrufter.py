@@ -11,7 +11,7 @@ Licence: BSD 3-Clause
 
 Parses IOS XE, NX-OS or EOS ACL output from show access-list command & attempts to de-cruft it by removing
 Access Control Entries (ACE) covered by an earlier deny, permit/deny with overlapping networks and/or merging
-permit/deny for adjacent networks.
+permit/deny for adjacent networks. Will also remove statements with overlapping port numbers.
 
 Caveats:
 1) IPv4 only & understands only a subset of ACL syntax (e.g. no object-groups), ignores remarks.
