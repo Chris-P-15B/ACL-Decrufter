@@ -10,13 +10,15 @@ from pathlib import Path
 Licence: BSD 3-Clause
 
 Parses IOS XE, NX-OS or EOS ACL output from show access-list command & attempts to de-cruft it by removing
-Access Control Entries (ACE) covered by an earlier deny, permit/deny with overlapping networks and/or merging
-permit/deny for adjacent networks. Will also remove statements with overlapping port numbers.
+Access Control Entries (ACE) where permit with an overlapping deny, or deny with an overlapping permit is present earlier in the ACL.
+Then removes permit/deny with overlapping networks & merges permit/deny for adjacent networks.
+Will also remove entries with overlapping port numbers.
 
 Caveats:
-1) IPv4 only & understands only a subset of ACL syntax (e.g. no object-groups), ignores remarks.
+1) IPv4 only & understands only a subset of ACL syntax (e.g. no object-groups), remarks & other unparsed lines are left as is.
 2) Attempts to minimise the number of ACEs, which may break the logic for chains of deny & permit statements. Test your results!
 
+v0.4 - Added handling remarks/unparsed lines, added removing ACEs where permit overlaps subsequent deny.
 v0.3 - Added outputing to subnet mask & wildcard mask notations.
 v0.2 - Minor fixes.
 v0.1 - Initial development release.
@@ -236,138 +238,154 @@ def parse_acl(acl_string):
             "optional_action": "",
         }
 
+        # For lines that couldn't be parsed, copy them verbatim as a remark
         if not acl_parts:
-            continue
-
-        notation = "prefix"
-        # Parse the Access Control Entry items into a dictionary of ACE elements, then store in a list
-        for item in acl_parts.groups():
-            item = item if item is not None else ""
-            if not ace_dict["line_num"] and re.search(r"^\d+", item):
-                ace_dict["line_num"] = item
-            elif not ace_dict["action"] and item in ["permit", "deny"]:
-                ace_dict["action"] = item
-            elif not ace_dict["protocol"] and item in PROTOCOL_NAMES:
-                ace_dict["protocol"] = item
-            elif not ace_dict["source_network"] and re.search(
-                r"\d+\.\d+\.\d+\.\d+|any|host|\d+\.\d+\.\d+\.\d+\/\d+", item
-            ):
-                # For CIDR create IPv4Network object, otherwise handle any, host or subnet mask
-                if "/" in item:
-                    ace_dict["source_network"] = item
-                    ace_dict["source_network_obj"] = ipaddress.IPv4Network(item)
-                elif item == "any":
-                    ace_dict["source_network"] = item
-                    ace_dict["source_network_obj"] = ipaddress.IPv4Network("0.0.0.0/0")
-                else:
-                    ace_dict["source_network"] = item
-            elif (
-                ace_dict["source_network"]
-                and not ace_dict["destination_network"]
-                and item in SUBNET_MASKS
-            ):
-                # Create IPv4Network object from subnet or wildcard mask
-                ace_dict["source_network"] += f"/{SUBNET_MASKS[item]}"
-                ace_dict["source_network_obj"] = ipaddress.IPv4Network(
-                    ace_dict["source_network"]
-                )
-                if item in ([x for x in list(SUBNET_MASKS)[::2]]):
-                    notation = "subnet"
-                else:
-                    notation = "wildcard"
-            elif (
-                ace_dict["source_network"]
-                and ace_dict["source_network"] == "host"
-                and not ace_dict["destination_network"]
-                and re.search(r"\d+\.\d+\.\d+\.\d+", item)
-            ):
-                # For host create IPv4Network object
-                ace_dict["source_network"] = f"{item}/32"
-                ace_dict["source_network_obj"] = ipaddress.IPv4Network(
-                    ace_dict["source_network"]
-                )
-            elif (
-                ace_dict["source_network"]
-                and not ace_dict["destination_network"]
-                and item in OPERATOR_NAMES
-            ):
-                ace_dict["source_operator"] = item
-            elif (
-                ace_dict["source_operator"]
-                and not ace_dict["source_ports"]
-                and re.search(r"\w+|\w+\s\w+", item)
-            ):
-                for port_number in item.split():
-                    if port_number in PORT_NAMES:
-                        ace_dict["source_ports"].append(int(PORT_NAMES[port_number]))
-                    else:
-                        ace_dict["source_ports"].append(int(port_number))
-            elif (
-                ace_dict["source_network"]
-                and not ace_dict["destination_network"]
-                and item in ["established", "echo", "echo-reply"]
-            ):
-                ace_dict["source_modifier"] = item
-            elif not ace_dict["destination_network"] and re.search(
-                r"\d+\.\d+\.\d+\.\d+|any|host|\d+\.\d+\.\d+\.\d+\/\d+", item
-            ):
-                # For CIDR create IPv4Network object, otherwise handle any, host or subnet mask
-                if "/" in item:
-                    ace_dict["destination_network"] = item
-                    ace_dict["destination_network_obj"] = ipaddress.IPv4Network(item)
-                elif item == "any":
-                    ace_dict["destination_network"] = item
-                    ace_dict["destination_network_obj"] = ipaddress.IPv4Network(
-                        "0.0.0.0/0"
-                    )
-                else:
-                    ace_dict["destination_network"] = item
-            elif ace_dict["destination_network"] and item in SUBNET_MASKS:
-                # Create IPv4Network object from subnet or wildcard mask
-                ace_dict["destination_network"] += f"/{SUBNET_MASKS[item]}"
-                ace_dict["destination_network_obj"] = ipaddress.IPv4Network(
-                    ace_dict["destination_network"]
-                )
-                if item in ([x for x in list(SUBNET_MASKS)[::2]]):
-                    notation = "subnet"
-                else:
-                    notation = "wildcard"
-            elif (
-                ace_dict["destination_network"]
-                and ace_dict["destination_network"] == "host"
-                and re.search(r"\d+\.\d+\.\d+\.\d+", item)
-            ):
-                # For host create IPv4Network object
-                ace_dict["destination_network"] = f"{item}/32"
-                ace_dict["destination_network_obj"] = ipaddress.IPv4Network(
-                    ace_dict["destination_network"]
-                )
-            elif ace_dict["destination_network"] and item in OPERATOR_NAMES:
-                ace_dict["destination_operator"] = item
-            elif (
-                ace_dict["destination_operator"]
-                and not ace_dict["destination_ports"]
-                and re.search(r"\w+|\w+\s\w+", item)
-            ):
-                for port_number in item.split():
-                    if port_number in PORT_NAMES:
-                        ace_dict["destination_ports"].append(
-                            int(PORT_NAMES[port_number])
+            acl_parts = re.search(r"^\s*(\d+)\s+(.+)$", line.lower().rstrip())
+            if not acl_parts:
+                continue
+            ace_dict = {
+                "line_num": acl_parts.group(1),
+                "action": "remark",
+                "optional_action": acl_parts.group(2),
+            }
+        # Parse ACE elements
+        else:
+            notation = "prefix"
+            # Parse the Access Control Entry items into a dictionary of ACE elements, then store in a list
+            for item in acl_parts.groups():
+                item = item if item is not None else ""
+                if not ace_dict["line_num"] and re.search(r"^\d+", item):
+                    ace_dict["line_num"] = item
+                elif not ace_dict["action"] and item in ["permit", "deny"]:
+                    ace_dict["action"] = item
+                elif not ace_dict["protocol"] and item in PROTOCOL_NAMES:
+                    ace_dict["protocol"] = item
+                elif not ace_dict["source_network"] and re.search(
+                    r"\d+\.\d+\.\d+\.\d+|any|host|\d+\.\d+\.\d+\.\d+\/\d+", item
+                ):
+                    # For CIDR create IPv4Network object, otherwise handle any, host or subnet mask
+                    if "/" in item:
+                        ace_dict["source_network"] = item
+                        ace_dict["source_network_obj"] = ipaddress.IPv4Network(item)
+                    elif item == "any":
+                        ace_dict["source_network"] = item
+                        ace_dict["source_network_obj"] = ipaddress.IPv4Network(
+                            "0.0.0.0/0"
                         )
                     else:
-                        ace_dict["destination_ports"].append(int(port_number))
-            elif ace_dict["destination_network"] and item in [
-                "established",
-                "echo",
-                "echo-reply",
-            ]:
-                ace_dict["destination_modifier"] = item
-            elif (
-                ace_dict["source_network"]
-                and ace_dict["destination_network"]
-                and item in ["log", "log-input"]
-            ):
-                ace_dict["optional_action"] = item
+                        ace_dict["source_network"] = item
+                elif (
+                    ace_dict["source_network"]
+                    and not ace_dict["destination_network"]
+                    and item in SUBNET_MASKS
+                ):
+                    # Create IPv4Network object from subnet or wildcard mask
+                    ace_dict["source_network"] += f"/{SUBNET_MASKS[item]}"
+                    ace_dict["source_network_obj"] = ipaddress.IPv4Network(
+                        ace_dict["source_network"]
+                    )
+                    if item in ([x for x in list(SUBNET_MASKS)[::2]]):
+                        notation = "subnet"
+                    else:
+                        notation = "wildcard"
+                elif (
+                    ace_dict["source_network"]
+                    and ace_dict["source_network"] == "host"
+                    and not ace_dict["destination_network"]
+                    and re.search(r"\d+\.\d+\.\d+\.\d+", item)
+                ):
+                    # For host create IPv4Network object
+                    ace_dict["source_network"] = f"{item}/32"
+                    ace_dict["source_network_obj"] = ipaddress.IPv4Network(
+                        ace_dict["source_network"]
+                    )
+                elif (
+                    ace_dict["source_network"]
+                    and not ace_dict["destination_network"]
+                    and item in OPERATOR_NAMES
+                ):
+                    ace_dict["source_operator"] = item
+                elif (
+                    ace_dict["source_operator"]
+                    and not ace_dict["source_ports"]
+                    and re.search(r"\w+|\w+\s\w+", item)
+                ):
+                    for port_number in item.split():
+                        if port_number in PORT_NAMES:
+                            ace_dict["source_ports"].append(
+                                int(PORT_NAMES[port_number])
+                            )
+                        else:
+                            ace_dict["source_ports"].append(int(port_number))
+                elif (
+                    ace_dict["source_network"]
+                    and not ace_dict["destination_network"]
+                    and item in ["established", "echo", "echo-reply"]
+                ):
+                    ace_dict["source_modifier"] = item
+                elif not ace_dict["destination_network"] and re.search(
+                    r"\d+\.\d+\.\d+\.\d+|any|host|\d+\.\d+\.\d+\.\d+\/\d+", item
+                ):
+                    # For CIDR create IPv4Network object, otherwise handle any, host or subnet mask
+                    if "/" in item:
+                        ace_dict["destination_network"] = item
+                        ace_dict["destination_network_obj"] = ipaddress.IPv4Network(
+                            item
+                        )
+                    elif item == "any":
+                        ace_dict["destination_network"] = item
+                        ace_dict["destination_network_obj"] = ipaddress.IPv4Network(
+                            "0.0.0.0/0"
+                        )
+                    else:
+                        ace_dict["destination_network"] = item
+                elif ace_dict["destination_network"] and item in SUBNET_MASKS:
+                    # Create IPv4Network object from subnet or wildcard mask
+                    ace_dict["destination_network"] += f"/{SUBNET_MASKS[item]}"
+                    ace_dict["destination_network_obj"] = ipaddress.IPv4Network(
+                        ace_dict["destination_network"]
+                    )
+                    if item in ([x for x in list(SUBNET_MASKS)[::2]]):
+                        notation = "subnet"
+                    else:
+                        notation = "wildcard"
+                elif (
+                    ace_dict["destination_network"]
+                    and ace_dict["destination_network"] == "host"
+                    and re.search(r"\d+\.\d+\.\d+\.\d+", item)
+                ):
+                    # For host create IPv4Network object
+                    ace_dict["destination_network"] = f"{item}/32"
+                    ace_dict["destination_network_obj"] = ipaddress.IPv4Network(
+                        ace_dict["destination_network"]
+                    )
+                elif ace_dict["destination_network"] and item in OPERATOR_NAMES:
+                    ace_dict["destination_operator"] = item
+                elif (
+                    ace_dict["destination_operator"]
+                    and not ace_dict["destination_ports"]
+                    and re.search(r"\w+|\w+\s\w+", item)
+                ):
+                    for port_number in item.split():
+                        if port_number in PORT_NAMES:
+                            ace_dict["destination_ports"].append(
+                                int(PORT_NAMES[port_number])
+                            )
+                        else:
+                            ace_dict["destination_ports"].append(int(port_number))
+                elif ace_dict["destination_network"] and item in [
+                    "established",
+                    "echo",
+                    "echo-reply",
+                ]:
+                    ace_dict["destination_modifier"] = item
+                elif (
+                    ace_dict["source_network"]
+                    and ace_dict["destination_network"]
+                    and item in ["log", "log-input"]
+                ):
+                    ace_dict["optional_action"] = item
+
         acl_list.append(ace_dict)
 
     return acl_list, notation
@@ -536,8 +554,9 @@ def check_source_destination_ports_match(ace1, ace2):
     return src_port_match, dst_port_match
 
 
-def check_overlapping_deny(acl_list):
-    """Iterate through acl_list top down, to remove permit ACEs with an overlapping deny statement earlier in the ACL.
+def check_overlapping_deny_permit(acl_list):
+    """Iterate through acl_list top down, to remove ACEs where permit with an overlapping deny, or
+    deny with an overlapping permit is present earlier in the ACL.
     Parameters:
     acl_list (list of dict) - list of ACE dicts
 
@@ -545,11 +564,55 @@ def check_overlapping_deny(acl_list):
     acl_list2 (list of dict) - remediated list of ACE dicts
     """
     acl_list2 = acl_list.copy()
+    # Check deny that overlaps subsequent permit
     for count, ace1 in enumerate(acl_list):
         if ace1["action"] == "deny":
             try:
                 for ace2 in acl_list[count + 1 :]:
+                    # Skip remarks
+                    if ace1["action"] == "remark" or ace2["action"] == "remark":
+                        continue
+
                     if (ace2["action"] == "permit") and (
+                        ace1["protocol"] == ace2["protocol"]
+                        or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
+                    ):
+                        if (
+                            ace2["source_network_obj"].subnet_of(
+                                ace1["source_network_obj"]
+                            )
+                            or ace1["source_network"] == "any"
+                        ):
+                            if (
+                                ace2["destination_network_obj"].subnet_of(
+                                    ace1["destination_network_obj"]
+                                )
+                                or ace1["destination_network"] == "any"
+                            ):
+                                (
+                                    src_port_match,
+                                    dst_port_match,
+                                ) = check_source_destination_ports_match(ace1, ace2)
+
+                                if src_port_match and dst_port_match:
+                                    for ace3 in acl_list2:
+                                        if ace3["line_num"] == ace2["line_num"]:
+                                            acl_list2.remove(ace3)
+                                            break
+            except IndexError:
+                pass
+
+    acl_list = acl_list2.copy()
+    # Check permit that overlaps subsequent deny
+    for count, ace1 in enumerate(acl_list):
+        if ace1["action"] == "permit":
+            try:
+                for ace2 in acl_list[count + 1 :]:
+                    # Skip remarks
+                    if ace1["action"] == "remark" or ace2["action"] == "remark":
+                        continue
+
+                    if (ace2["action"] == "deny") and (
                         ace1["protocol"] == ace2["protocol"]
                         or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
                     ):
@@ -593,6 +656,10 @@ def check_overlapping_networks(acl_list):
     for count, ace1 in enumerate(acl_list):
         try:
             for ace2 in acl_list[count + 1 :]:
+                # Skip remarks
+                if ace1["action"] == "remark" or ace2["action"] == "remark":
+                    continue
+
                 if (ace1["action"] == ace2["action"]) and (
                     ace1["protocol"] == ace2["protocol"]
                     or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
@@ -624,6 +691,10 @@ def check_overlapping_networks(acl_list):
     for count, ace1 in enumerate(reversed(acl_list)):
         try:
             for ace2 in list(reversed(acl_list))[count + 1 :]:
+                # Skip remarks
+                if ace1["action"] == "remark" or ace2["action"] == "remark":
+                    continue
+
                 if (ace1["action"] == ace2["action"]) and (
                     ace1["protocol"] == ace2["protocol"]
                     or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
@@ -655,7 +726,7 @@ def check_overlapping_networks(acl_list):
 
 
 def check_adjacent_networks(acl_list):
-    """Iterate through acl_list top down & bottom up to merge adjacent source networks.
+    """Iterate through acl_list top down & bottom up to merge adjacent networks.
     Parameters:
     acl_list (list of dict) - list of ACE dicts
 
@@ -667,6 +738,10 @@ def check_adjacent_networks(acl_list):
     for count, ace1 in enumerate(acl_list):
         try:
             for ace2 in acl_list[count + 1 :]:
+                # Skip remarks
+                if ace1["action"] == "remark" or ace2["action"] == "remark":
+                    continue
+
                 if (ace1["action"] == ace2["action"]) and (
                     ace1["protocol"] == ace2["protocol"]
                     or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
@@ -706,6 +781,10 @@ def check_adjacent_networks(acl_list):
     for count, ace1 in enumerate(reversed(acl_list)):
         try:
             for ace2 in list(reversed(acl_list))[count + 1 :]:
+                # Skip remarks
+                if ace1["action"] == "remark" or ace2["action"] == "remark":
+                    continue
+
                 if (ace1["action"] == ace2["action"]) and (
                     ace1["protocol"] == ace2["protocol"]
                     or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
@@ -746,6 +825,10 @@ def check_adjacent_networks(acl_list):
     for count, ace1 in enumerate(acl_list):
         try:
             for ace2 in acl_list[count + 1 :]:
+                # Skip remarks
+                if ace1["action"] == "remark" or ace2["action"] == "remark":
+                    continue
+
                 if (ace1["action"] == ace2["action"]) and (
                     ace1["protocol"] == ace2["protocol"]
                     or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
@@ -790,6 +873,10 @@ def check_adjacent_networks(acl_list):
     for count, ace1 in enumerate(reversed(acl_list)):
         try:
             for ace2 in list(reversed(acl_list))[count + 1 :]:
+                # Skip remarks
+                if ace1["action"] == "remark" or ace2["action"] == "remark":
+                    continue
+
                 if (ace1["action"] == ace2["action"]) and (
                     ace1["protocol"] == ace2["protocol"]
                     or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
@@ -842,81 +929,85 @@ def display_ACL(acl_list, notation):
     notation (str) - ACL uses prefix, subnet or wildcard notation
     """
     for ace in acl_list:
-        # Generate correct output for different network notations
-        # Subnet masks are first in the lookup dictionary, so use first match
-        if notation == "subnet":
-            if ace["source_network"] == "any":
-                source_network = ace["source_network"]
-            else:
-                subnet_mask = ace["source_network"][
-                    ace["source_network"].find("/") + 1 :
-                ]
-                for key, value in SUBNET_MASKS.items():
-                    if subnet_mask == value:
-                        source_network = ace["source_network"][
-                            : ace["source_network"].find("/")
-                        ]
-                        source_network += f" {key}"
-                        break
-            if ace["destination_network"] == "any":
-                destination_network = ace["destination_network"]
-            else:
-                subnet_mask = ace["destination_network"][
-                    ace["destination_network"].find("/") + 1 :
-                ]
-                for key, value in SUBNET_MASKS.items():
-                    if subnet_mask == value:
-                        destination_network = ace["destination_network"][
-                            : ace["destination_network"].find("/")
-                        ]
-                        destination_network += f" {key}"
-                        break
-        # Wildcard masks are second in the lookup dictionary, so use last match
-        elif notation == "wildcard":
-            if ace["source_network"] == "any":
-                source_network = ace["source_network"]
-            else:
-                subnet_mask = ace["source_network"][
-                    ace["source_network"].find("/") + 1 :
-                ]
-                for key, value in SUBNET_MASKS.items():
-                    if subnet_mask == value:
-                        source_network = ace["source_network"][
-                            : ace["source_network"].find("/")
-                        ]
-                        source_network += f" {key}"
-                        continue
-            if ace["destination_network"] == "any":
-                destination_network = ace["destination_network"]
-            else:
-                subnet_mask = ace["destination_network"][
-                    ace["destination_network"].find("/") + 1 :
-                ]
-                for key, value in SUBNET_MASKS.items():
-                    if subnet_mask == value:
-                        destination_network = ace["destination_network"][
-                            : ace["destination_network"].find("/")
-                        ]
-                        destination_network += f" {key}"
-                        continue
-        # Default to prefix notation, no special handling
+        # Handle remarks
+        if ace["action"] == "remark":
+            parsed_ace = f"{ace['optional_action']}"
         else:
-            source_network = ace["source_network"]
-            destination_network = ace["destination_network"]
+            # Generate correct output for different network notations
+            # Subnet masks are first in the lookup dictionary, so use first match
+            if notation == "subnet":
+                if ace["source_network"] == "any":
+                    source_network = ace["source_network"]
+                else:
+                    subnet_mask = ace["source_network"][
+                        ace["source_network"].find("/") + 1 :
+                    ]
+                    for key, value in SUBNET_MASKS.items():
+                        if subnet_mask == value:
+                            source_network = ace["source_network"][
+                                : ace["source_network"].find("/")
+                            ]
+                            source_network += f" {key}"
+                            break
+                if ace["destination_network"] == "any":
+                    destination_network = ace["destination_network"]
+                else:
+                    subnet_mask = ace["destination_network"][
+                        ace["destination_network"].find("/") + 1 :
+                    ]
+                    for key, value in SUBNET_MASKS.items():
+                        if subnet_mask == value:
+                            destination_network = ace["destination_network"][
+                                : ace["destination_network"].find("/")
+                            ]
+                            destination_network += f" {key}"
+                            break
+            # Wildcard masks are second in the lookup dictionary, so use last match
+            elif notation == "wildcard":
+                if ace["source_network"] == "any":
+                    source_network = ace["source_network"]
+                else:
+                    subnet_mask = ace["source_network"][
+                        ace["source_network"].find("/") + 1 :
+                    ]
+                    for key, value in SUBNET_MASKS.items():
+                        if subnet_mask == value:
+                            source_network = ace["source_network"][
+                                : ace["source_network"].find("/")
+                            ]
+                            source_network += f" {key}"
+                            continue
+                if ace["destination_network"] == "any":
+                    destination_network = ace["destination_network"]
+                else:
+                    subnet_mask = ace["destination_network"][
+                        ace["destination_network"].find("/") + 1 :
+                    ]
+                    for key, value in SUBNET_MASKS.items():
+                        if subnet_mask == value:
+                            destination_network = ace["destination_network"][
+                                : ace["destination_network"].find("/")
+                            ]
+                            destination_network += f" {key}"
+                            continue
+            # Default to prefix notation, no special handling
+            else:
+                source_network = ace["source_network"]
+                destination_network = ace["destination_network"]
 
-        parsed_ace = (
-            f"{ace['action']} "
-            f"{ace['protocol']} "
-            f"{source_network} "
-            f"{ace['source_operator']} "
-            f"{' '.join(str(x) for x in ace['source_ports']) if ace['source_ports'] else ''} "
-            f"{ace['source_modifier']} "
-            f"{destination_network} "
-            f"{ace['destination_operator']} "
-            f"{' '.join(str(x) for x in ace['destination_ports']) if ace['destination_ports'] else ''} "
-            f"{ace['destination_modifier']} "
-            f"{ace['optional_action']} "
-        )
+            parsed_ace = (
+                f"{ace['action']} "
+                f"{ace['protocol']} "
+                f"{source_network} "
+                f"{ace['source_operator']} "
+                f"{' '.join(str(x) for x in ace['source_ports']) if ace['source_ports'] else ''} "
+                f"{ace['source_modifier']} "
+                f"{destination_network} "
+                f"{ace['destination_operator']} "
+                f"{' '.join(str(x) for x in ace['destination_ports']) if ace['destination_ports'] else ''} "
+                f"{ace['destination_modifier']} "
+                f"{ace['optional_action']} "
+            )
         print(re.sub(r" +", " ", parsed_ace))
 
 
@@ -947,48 +1038,57 @@ def main():
 
     # Sanity checks
     for ace in acl_list:
-        assert ace["action"] in ("permit", "deny")
-        assert ace["protocol"] in PROTOCOL_NAMES
-        assert re.search("\d+\.\d+\.\d+\.\d+\/\d+|any", ace["source_network"])
-        assert isinstance(ace["source_network_obj"], ipaddress.IPv4Network)
-        if ace["source_operator"] == "eq" or ace["source_operator"] == "neq":
-            assert ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
-        elif ace["source_operator"] == "lt" or ace["source_operator"] == "gt":
-            assert ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
-        elif ace["source_operator"] == "range":
-            assert (
-                ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
-            ) and (ace["source_ports"][1] >= 0 and ace["source_ports"][1] <= 65535)
-        assert isinstance(ace["source_modifier"], str)
-        assert re.search("\d+\.\d+\.\d+\.\d+\/\d+|any", ace["destination_network"])
-        assert isinstance(ace["destination_network_obj"], ipaddress.IPv4Network)
-        if ace["destination_operator"] == "eq" or ace["destination_operator"] == "neq":
-            assert (
-                ace["destination_ports"][0] >= 0
-                and ace["destination_ports"][0] <= 65535
-            )
-        elif ace["destination_operator"] == "lt" or ace["destination_operator"] == "gt":
-            assert (
-                ace["destination_ports"][0] >= 0
-                and ace["destination_ports"][0] <= 65535
-            )
-        elif ace["destination_operator"] == "range":
-            assert (
-                ace["destination_ports"][0] >= 0
-                and ace["destination_ports"][0] <= 65535
-            ) and (
-                ace["destination_ports"][1] >= 0
-                and ace["destination_ports"][1] <= 65535
-            )
-        assert isinstance(ace["destination_modifier"], str)
-        assert isinstance(ace["optional_action"], str)
+        assert ace["action"] in ("permit", "deny", "remark")
+        if ace["action"] == "remark":
+            assert isinstance(ace["optional_action"], str)
+        else:
+            assert ace["protocol"] in PROTOCOL_NAMES
+            assert re.search("\d+\.\d+\.\d+\.\d+\/\d+|any", ace["source_network"])
+            assert isinstance(ace["source_network_obj"], ipaddress.IPv4Network)
+            if ace["source_operator"] == "eq" or ace["source_operator"] == "neq":
+                assert ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
+            elif ace["source_operator"] == "lt" or ace["source_operator"] == "gt":
+                assert ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
+            elif ace["source_operator"] == "range":
+                assert (
+                    ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
+                ) and (ace["source_ports"][1] >= 0 and ace["source_ports"][1] <= 65535)
+            assert isinstance(ace["source_modifier"], str)
+            assert re.search("\d+\.\d+\.\d+\.\d+\/\d+|any", ace["destination_network"])
+            assert isinstance(ace["destination_network_obj"], ipaddress.IPv4Network)
+            if (
+                ace["destination_operator"] == "eq"
+                or ace["destination_operator"] == "neq"
+            ):
+                assert (
+                    ace["destination_ports"][0] >= 0
+                    and ace["destination_ports"][0] <= 65535
+                )
+            elif (
+                ace["destination_operator"] == "lt"
+                or ace["destination_operator"] == "gt"
+            ):
+                assert (
+                    ace["destination_ports"][0] >= 0
+                    and ace["destination_ports"][0] <= 65535
+                )
+            elif ace["destination_operator"] == "range":
+                assert (
+                    ace["destination_ports"][0] >= 0
+                    and ace["destination_ports"][0] <= 65535
+                ) and (
+                    ace["destination_ports"][1] >= 0
+                    and ace["destination_ports"][1] <= 65535
+                )
+            assert isinstance(ace["destination_modifier"], str)
+            assert isinstance(ace["optional_action"], str)
 
     if verbose_mode:
         print("\nOriginal ACL:")
         display_ACL(acl_list, notation)
 
     # Note that IPv4Network.subnet_of() considers identical networks as a subnet, so need to skip comparing to self
-    acl_list2 = check_overlapping_deny(acl_list)
+    acl_list2 = check_overlapping_deny_permit(acl_list)
     if verbose_mode:
         # Display ACL with denied ACEs removed
         print("\nNon-Overlapping Deny ACL:")
