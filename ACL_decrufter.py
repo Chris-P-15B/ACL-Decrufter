@@ -240,7 +240,7 @@ def parse_acl(acl_string):
 
         # For lines that couldn't be parsed, copy them verbatim as a remark
         if not acl_parts:
-            acl_parts = re.search(r"^\s*(\d+)\s+(.+)$", line.lower().rstrip())
+            acl_parts = re.search(r"^\s*(\d+)\s+(.+)$", line.rstrip())
             if not acl_parts:
                 continue
             ace_dict = {
