@@ -1038,6 +1038,7 @@ def main():
 
     # Sanity checks
     for ace in acl_list:
+        assert isinstance(ace["line_num"], str)
         assert ace["action"] in ("permit", "deny", "remark")
         if ace["action"] == "remark":
             assert isinstance(ace["optional_action"], str)
