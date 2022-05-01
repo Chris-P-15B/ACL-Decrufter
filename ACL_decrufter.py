@@ -18,6 +18,7 @@ Caveats:
 1) IPv4 only & understands only a subset of ACL syntax (e.g. no object-groups), remarks & other unparsed lines are left as is.
 2) Attempts to minimise the number of ACEs, which may break the logic for chains of deny & permit statements. Test your results!
 
+v0.5 - Tidying.
 v0.4 - Added handling remarks/unparsed lines, added removing ACEs where permit overlaps subsequent deny.
 v0.3 - Added outputing to subnet mask & wildcard mask notations.
 v0.2 - Minor fixes.
@@ -209,7 +210,7 @@ def parse_acl(acl_string):
     acl_string (str) - ACL text to parse
 
     Returns:
-    acl_list (list of dict) - list of ACE dicts
+    acl_list (list of dict) - list of ACE dictionaries
     notation (str) - ACL uses prefix, subnet or wildcard notation
     """
     acl_list = []
@@ -392,7 +393,9 @@ def parse_acl(acl_string):
 
 
 def check_source_destination_ports_match(ace1, ace2):
-    """Check ACE source & destination ports/modifiers match, if specified.
+    """
+    Check ACE source & destination ports/modifiers match, if specified.
+
     Parameters:
     ace1 (dict) - ACE dictionary
     ace2 (dict) - ACE dictionary
@@ -555,13 +558,15 @@ def check_source_destination_ports_match(ace1, ace2):
 
 
 def check_overlapping_deny_permit(acl_list):
-    """Iterate through acl_list top down, to remove ACEs where permit with an overlapping deny, or
+    """
+    Iterate through acl_list top down, to remove ACEs where permit with an overlapping deny, or
     deny with an overlapping permit is present earlier in the ACL.
+
     Parameters:
-    acl_list (list of dict) - list of ACE dicts
+    acl_list (list of dict) - list of ACE dictionaries
 
     Returns:
-    acl_list2 (list of dict) - remediated list of ACE dicts
+    acl_list2 (list of dict) - remediated list of ACE dictionaries
     """
     acl_list2 = acl_list.copy()
     # Check deny that overlaps subsequent permit
@@ -645,12 +650,14 @@ def check_overlapping_deny_permit(acl_list):
 
 
 def check_overlapping_networks(acl_list):
-    """Iterate through acl_list top down & bottom up, to remove ACEs with networks that are subnets of other entries.
+    """
+    Iterate through acl_list top down & bottom up, to remove ACEs with networks that are subnets of other entries.
+
     Parameters:
-    acl_list (list of dict) - list of ACE dicts
+    acl_list (list of dict) - list of ACE dictionaries
 
     Returns:
-    acl_list2 (list of dict) - remediated list of ACE dicts
+    acl_list2 (list of dict) - remediated list of ACE dictionaries
     """
     acl_list2 = acl_list.copy()
     for count, ace1 in enumerate(acl_list):
@@ -726,12 +733,14 @@ def check_overlapping_networks(acl_list):
 
 
 def check_adjacent_networks(acl_list):
-    """Iterate through acl_list top down & bottom up to merge adjacent networks.
+    """
+    Iterate through acl_list top down & bottom up to merge adjacent networks.
+
     Parameters:
-    acl_list (list of dict) - list of ACE dicts
+    acl_list (list of dict) - list of ACE dictionaries
 
     Returns:
-    acl_list2 (list of dict) - remediated list of ACE dicts
+    acl_list2 (list of dict) - remediated list of ACE dictionaries
     """
     acl_list2 = acl_list.copy()
     # Check source networks
@@ -925,7 +934,7 @@ def display_ACL(acl_list, notation):
     Print readable form of list of ACE dictionaries.
 
     Parameters:
-    acl_list (list of dict) - list of ACE dicts
+    acl_list (list of dict) - list of ACE dictionaries
     notation (str) - ACL uses prefix, subnet or wildcard notation
     """
     for ace in acl_list:
@@ -1012,7 +1021,9 @@ def display_ACL(acl_list, notation):
 
 
 def main():
-    """Ties the whole process together."""
+    """
+    Ties the whole process together.
+    """
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} [filename] [verbose]")
         print(
@@ -1092,14 +1103,14 @@ def main():
     acl_list2 = check_overlapping_deny_permit(acl_list)
     if verbose_mode:
         # Display ACL with denied ACEs removed
-        print("\nNon-Overlapping Deny ACL:")
+        print("\nRemoved Deny/Permit Overlapping Subsequent Permit/Deny ACL:")
         display_ACL(acl_list2, notation)
 
     acl_list = acl_list2.copy()
     acl_list2 = check_overlapping_networks(acl_list)
     if verbose_mode:
         # Display ACL with overlapping ACEs removed
-        print("\nNon-Overlapping Networks ACL:")
+        print("\nRemoved Overlapping Networks ACL:")
         display_ACL(acl_list2, notation)
 
     acl_list = acl_list2.copy()
