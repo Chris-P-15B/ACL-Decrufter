@@ -9,6 +9,7 @@ Caveats:
 
 
 Version History:
+* v1.0 - Added many missing port name to port number mappings.
 * v0.5 - Tidying.
 * v0.4 - Added handling remarks/unparsed lines, added removing ACEs where permit overlaps subsequent deny.
 * v0.3 - Added outputing to subnet mask & wildcard mask notations.
