@@ -351,6 +351,7 @@ def parse_acl(acl_string):
     notation (str) - ACL uses prefix, subnet or wildcard notation
     """
     acl_list = []
+    notation = "prefix"
     for line in acl_string.splitlines():
         acl_parts = re.search(
             r"^\s*(\d+)\s+(permit|deny)\s(\w+)\s(\d+\.\d+\.\d+\.\d+|any|host|\d+\.\d+\.\d+\.\d+\/\d+)\s*(\d+\.\d+\.\d+\.\d+)?"
@@ -388,7 +389,6 @@ def parse_acl(acl_string):
             }
         # Parse ACE elements
         else:
-            notation = "prefix"
             # Parse the Access Control Entry items into a dictionary of ACE elements, then store in a list
             for item in acl_parts.groups():
                 item = item if item is not None else ""
