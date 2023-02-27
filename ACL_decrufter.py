@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 """
-(c) 2022, Chris Perkins
+Copyright (c) 2022, Chris Perkins
 Licence: BSD 3-Clause
 
 Parses IOS XE, NX-OS or EOS ACL output from show access-list command & attempts to de-cruft it by removing
