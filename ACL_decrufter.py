@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 """
-Copyright (c) 2022, Chris Perkins
+Copyright (c) 2022 - 2024, Chris Perkins
 Licence: BSD 3-Clause
 
 Parses IOS XE, NX-OS or EOS ACL output from show access-list command & attempts to de-cruft it by removing
@@ -18,6 +18,7 @@ Caveats:
 1) IPv4 only & understands only a subset of ACL syntax (e.g. no object-groups), remarks & other unparsed lines are left as is.
 2) Attempts to minimise the number of ACEs, which may break the logic for chains of deny & permit statements. Test your results!
 
+v1.1 - Bugfixes & code simplification.
 v1.0 - Added many missing port name to port number mappings.
 v0.5 - Tidying.
 v0.4 - Added handling remarks/unparsed lines, added removing ACEs where permit overlaps subsequent deny.
@@ -788,7 +789,7 @@ def check_overlapping_deny_permit(acl_list):
 
 def check_overlapping_networks(acl_list):
     """
-    Iterate through acl_list top down & bottom up, to remove ACEs with networks that are subnets of other entries.
+    Iterate through acl_list top down to remove ACEs with networks that are subnets of other entries.
 
     Parameters:
     acl_list (list of dict) - list of ACE dictionaries
@@ -800,41 +801,6 @@ def check_overlapping_networks(acl_list):
     for count, ace1 in enumerate(acl_list):
         try:
             for ace2 in acl_list[count + 1 :]:
-                # Skip remarks
-                if ace1["action"] == "remark" or ace2["action"] == "remark":
-                    continue
-
-                if (ace1["action"] == ace2["action"]) and (
-                    ace1["protocol"] == ace2["protocol"]
-                    or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
-                ):
-                    if (
-                        ace2["source_network_obj"].subnet_of(ace1["source_network_obj"])
-                        or ace1["source_network"] == "any"
-                    ):
-                        if (
-                            ace2["destination_network_obj"].subnet_of(
-                                ace1["destination_network_obj"]
-                            )
-                            or ace1["destination_network"] == "any"
-                        ):
-                            (
-                                src_port_match,
-                                dst_port_match,
-                            ) = check_source_destination_ports_match(ace1, ace2)
-
-                            if src_port_match and dst_port_match:
-                                for ace3 in acl_list2:
-                                    if ace3["line_num"] == ace2["line_num"]:
-                                        acl_list2.remove(ace3)
-                                        break
-        except IndexError:
-            pass
-
-    acl_list = acl_list2.copy()
-    for count, ace1 in enumerate(reversed(acl_list)):
-        try:
-            for ace2 in list(reversed(acl_list))[count + 1 :]:
                 # Skip remarks
                 if ace1["action"] == "remark" or ace2["action"] == "remark":
                     continue
@@ -871,7 +837,7 @@ def check_overlapping_networks(acl_list):
 
 def check_adjacent_networks(acl_list):
     """
-    Iterate through acl_list top down & bottom up to merge adjacent networks.
+    Iterate through acl_list top down to merge adjacent networks.
 
     Parameters:
     acl_list (list of dict) - list of ACE dictionaries
@@ -884,49 +850,6 @@ def check_adjacent_networks(acl_list):
     for count, ace1 in enumerate(acl_list):
         try:
             for ace2 in acl_list[count + 1 :]:
-                # Skip remarks
-                if ace1["action"] == "remark" or ace2["action"] == "remark":
-                    continue
-
-                if (ace1["action"] == ace2["action"]) and (
-                    ace1["protocol"] == ace2["protocol"]
-                    or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
-                ):
-                    if (ace1["destination_network"] == ace2["destination_network"]) or (
-                        ace1["destination_network"] == "any"
-                    ):
-                        merged_network = list(
-                            ipaddress.collapse_addresses(
-                                [ace1["source_network_obj"], ace2["source_network_obj"]]
-                            )
-                        )
-                        # ipaddress.collapse_addresses will return a single IPv4Network if passed adjacent networks
-                        if len(merged_network) == 1:
-                            (
-                                src_port_match,
-                                dst_port_match,
-                            ) = check_source_destination_ports_match(ace1, ace2)
-
-                            if src_port_match and dst_port_match:
-                                # Replace with merged network
-                                for ace3 in acl_list2:
-                                    if ace3["line_num"] == ace1["line_num"]:
-                                        ace1["source_network"] = merged_network[
-                                            0
-                                        ].with_prefixlen
-                                        ace1["source_network_obj"] = merged_network[0]
-                                        break
-                                for ace3 in acl_list2:
-                                    if ace3["line_num"] == ace2["line_num"]:
-                                        acl_list2.remove(ace3)
-                                        break
-        except IndexError:
-            pass
-
-    acl_list = acl_list2.copy()
-    for count, ace1 in enumerate(reversed(acl_list)):
-        try:
-            for ace2 in list(reversed(acl_list))[count + 1 :]:
                 # Skip remarks
                 if ace1["action"] == "remark" or ace2["action"] == "remark":
                     continue
@@ -1004,57 +927,9 @@ def check_adjacent_networks(acl_list):
                                         ace1["destination_network"] = merged_network[
                                             0
                                         ].with_prefixlen
-                                        ace1[
-                                            "destination_network_obj"
-                                        ] = merged_network[0]
-                                        break
-                                for ace3 in acl_list2:
-                                    if ace3["line_num"] == ace2["line_num"]:
-                                        acl_list2.remove(ace3)
-                                        break
-        except IndexError:
-            pass
-
-    acl_list = acl_list2.copy()
-    for count, ace1 in enumerate(reversed(acl_list)):
-        try:
-            for ace2 in list(reversed(acl_list))[count + 1 :]:
-                # Skip remarks
-                if ace1["action"] == "remark" or ace2["action"] == "remark":
-                    continue
-
-                if (ace1["action"] == ace2["action"]) and (
-                    ace1["protocol"] == ace2["protocol"]
-                    or (ace1["protocol"] == "ip" or ace1["protocol"] == "ipv4")
-                ):
-                    if (ace1["source_network"] == ace2["source_network"]) or (
-                        ace1["source_network"] == "any"
-                    ):
-                        merged_network = list(
-                            ipaddress.collapse_addresses(
-                                [
-                                    ace1["destination_network_obj"],
-                                    ace2["destination_network_obj"],
-                                ]
-                            )
-                        )
-                        # ipaddress.collapse_addresses will return a single IPv4Network if passed adjacent networks
-                        if len(merged_network) == 1:
-                            (
-                                src_port_match,
-                                dst_port_match,
-                            ) = check_source_destination_ports_match(ace1, ace2)
-
-                            if src_port_match and dst_port_match:
-                                # Replace with merged network
-                                for ace3 in acl_list2:
-                                    if ace3["line_num"] == ace1["line_num"]:
-                                        ace1["destination_network"] = merged_network[
-                                            0
-                                        ].with_prefixlen
-                                        ace1[
-                                            "destination_network_obj"
-                                        ] = merged_network[0]
+                                        ace1["destination_network_obj"] = (
+                                            merged_network[0]
+                                        )
                                         break
                                 for ace3 in acl_list2:
                                     if ace3["line_num"] == ace2["line_num"]:
@@ -1162,7 +1037,7 @@ def main():
     Ties the whole process together.
     """
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} [filename] [verbose]")
+        print(f"Usage: {sys.argv[0]} {{filename}} [verbose]")
         print(
             "\nVerbose keyword enables optional output of the intermediate ACL de-crufting stages."
         )
@@ -1186,25 +1061,35 @@ def main():
 
     # Sanity checks
     for ace in acl_list:
-        assert isinstance(ace["line_num"], str)
-        assert ace["action"] in ("permit", "deny", "remark")
+        assert isinstance(ace["line_num"], str), ace
+        assert ace["action"] in ("permit", "deny", "remark"), ace
         if ace["action"] == "remark":
-            assert isinstance(ace["optional_action"], str)
+            assert isinstance(ace["optional_action"], str), ace
         else:
-            assert ace["protocol"] in PROTOCOL_NAMES
-            assert re.search("\d+\.\d+\.\d+\.\d+\/\d+|any", ace["source_network"])
-            assert isinstance(ace["source_network_obj"], ipaddress.IPv4Network)
+            assert ace["protocol"] in PROTOCOL_NAMES, ace
+            assert re.search("\d+\.\d+\.\d+\.\d+\/\d+|any", ace["source_network"]), ace
+            assert isinstance(ace["source_network_obj"], ipaddress.IPv4Network), ace
             if ace["source_operator"] == "eq" or ace["source_operator"] == "neq":
-                assert ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
+                assert (
+                    ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
+                ), ace
             elif ace["source_operator"] == "lt" or ace["source_operator"] == "gt":
-                assert ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
+                assert (
+                    ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
+                ), ace
             elif ace["source_operator"] == "range":
                 assert (
                     ace["source_ports"][0] >= 0 and ace["source_ports"][0] <= 65535
-                ) and (ace["source_ports"][1] >= 0 and ace["source_ports"][1] <= 65535)
-            assert isinstance(ace["source_modifier"], str)
-            assert re.search("\d+\.\d+\.\d+\.\d+\/\d+|any", ace["destination_network"])
-            assert isinstance(ace["destination_network_obj"], ipaddress.IPv4Network)
+                ) and (
+                    ace["source_ports"][1] >= 0 and ace["source_ports"][1] <= 65535
+                ), ace
+            assert isinstance(ace["source_modifier"], str), ace
+            assert re.search(
+                "\d+\.\d+\.\d+\.\d+\/\d+|any", ace["destination_network"]
+            ), ace
+            assert isinstance(
+                ace["destination_network_obj"], ipaddress.IPv4Network
+            ), ace
             if (
                 ace["destination_operator"] == "eq"
                 or ace["destination_operator"] == "neq"
@@ -1212,7 +1097,7 @@ def main():
                 assert (
                     ace["destination_ports"][0] >= 0
                     and ace["destination_ports"][0] <= 65535
-                )
+                ), ace
             elif (
                 ace["destination_operator"] == "lt"
                 or ace["destination_operator"] == "gt"
@@ -1220,7 +1105,7 @@ def main():
                 assert (
                     ace["destination_ports"][0] >= 0
                     and ace["destination_ports"][0] <= 65535
-                )
+                ), ace
             elif ace["destination_operator"] == "range":
                 assert (
                     ace["destination_ports"][0] >= 0
@@ -1228,38 +1113,49 @@ def main():
                 ) and (
                     ace["destination_ports"][1] >= 0
                     and ace["destination_ports"][1] <= 65535
-                )
-            assert isinstance(ace["destination_modifier"], str)
-            assert isinstance(ace["optional_action"], str)
+                ), ace
+            assert isinstance(ace["destination_modifier"], str), ace
+            assert isinstance(ace["optional_action"], str), ace
 
     if verbose_mode:
         print("\nOriginal ACL:")
         display_ACL(acl_list, notation)
 
+    # Keep decrufting until no more changes...
     # Note that IPv4Network.subnet_of() considers identical networks as a subnet, so need to skip comparing to self
-    acl_list2 = check_overlapping_deny_permit(acl_list)
-    if verbose_mode:
-        # Display ACL with denied ACEs removed
-        print("\nRemoved Deny/Permit Overlapping Subsequent Permit/Deny ACL:")
-        display_ACL(acl_list2, notation)
+    changes_made = True
+    while changes_made:
+        changes_made = False
+        acl_list2 = check_overlapping_deny_permit(acl_list)
+        if acl_list2 != acl_list:
+            changes_made = True
+        if verbose_mode:
+            # Display ACL with denied ACEs removed
+            print("\nRemoved Deny/Permit Overlapping Subsequent Permit/Deny ACL:")
+            display_ACL(acl_list2, notation)
 
-    acl_list = acl_list2.copy()
-    acl_list2 = check_overlapping_networks(acl_list)
-    if verbose_mode:
-        # Display ACL with overlapping ACEs removed
-        print("\nRemoved Overlapping Networks ACL:")
-        display_ACL(acl_list2, notation)
+        acl_list = acl_list2.copy()
+        acl_list2 = check_overlapping_networks(acl_list)
+        if acl_list2 != acl_list:
+            changes_made = True
+        if verbose_mode:
+            # Display ACL with overlapping ACEs removed
+            print("\nRemoved Overlapping Networks ACL:")
+            display_ACL(acl_list2, notation)
 
-    acl_list = acl_list2.copy()
-    acl_list2 = check_adjacent_networks(acl_list)
-    if verbose_mode:
-        # Display ACL with adjacent networks merged
-        print("\nMerged Adjacent Networks ACL:")
-        display_ACL(acl_list2, notation)
+        acl_list = acl_list2.copy()
+        acl_list2 = check_adjacent_networks(acl_list)
+        if acl_list2 != acl_list:
+            changes_made = True
+        if verbose_mode:
+            # Display ACL with adjacent networks merged
+            print("\nMerged Adjacent Networks ACL:")
+            display_ACL(acl_list2, notation)
+        acl_list = acl_list2.copy()
 
     # Display decrufted ACL
     print("\nDecrufted ACL:")
-    display_ACL(acl_list2, notation)
+    display_ACL(acl_list, notation)
 
 
 if __name__ == "__main__":

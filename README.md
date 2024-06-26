@@ -1,5 +1,5 @@
 # ACL Decrufter
-Copyright (c) 2022, Chris Perkins.
+Copyright (c) 2022 - 2024, Chris Perkins.
 
 Parses IOS XE, NX-OS or EOS ACL output from show access-list command & attempts to de-cruft it by removing Access Control Entries (ACE) where permit with an overlapping deny, or deny with an overlapping permit is present earlier in the ACL. Then removes permit/deny with overlapping networks & merges permit/deny for adjacent networks. Will also remove entries with overlapping port numbers.
 
@@ -9,6 +9,8 @@ Caveats:
 
 
 Version History:
+
+* v1.1 - Bugfixes & code simplification.
 * v1.0 - Added many missing port name to port number mappings.
 * v0.5 - Tidying.
 * v0.4 - Added handling remarks/unparsed lines, added removing ACEs where permit overlaps subsequent deny.
